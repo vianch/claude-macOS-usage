@@ -104,8 +104,15 @@ def delete_session_key():
 def extract_chrome_session_key():
     """Try to extract claude.ai sessionKey from Chrome cookies.
 
-    Chrome encrypts cookies with a key stored in Keychain.
-    On macOS, we can read it if the user grants Keychain access.
+    This function reads Chrome's local cookie SQLite database (a copy is made
+    to avoid lock conflicts) and, if the cookie is encrypted, decrypts it using
+    Chrome's Safe Storage key from the macOS Keychain. The user will be prompted
+    by macOS to grant Keychain access the first time this runs.
+
+    Note: This couples to Chrome's internal cookie storage format (AES-CBC with
+    PBKDF2-derived key, salt='saltysalt', 1003 iterations). Changes to Chrome's
+    encryption scheme may break this functionality.
+
     Returns the sessionKey value or None.
     """
     chrome_cookie_path = os.path.expanduser(
@@ -206,7 +213,7 @@ def _session_headers(session_key):
     return {
         "cookie": f"sessionKey={session_key}",
         "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "accept": "application/json",
     }
 
@@ -221,6 +228,7 @@ def validate_session(session_key):
             f"{CLAUDE_AI_API}/organizations",
             headers=_session_headers(session_key),
             timeout=10,
+            verify=True,
         )
         if resp.status_code != 200:
             return None

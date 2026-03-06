@@ -266,7 +266,13 @@ class ClaudeUsageApp(rumps.App):
                     session_key = get_session_key()
                     if session_key and self.org_id:
                         live = fetch_claude_ai_usage(session_key, self.org_id)
-                        if live:
+                        if live and live.get("expired"):
+                            # Session expired — disconnect automatically
+                            delete_session_key()
+                            self.has_session = False
+                            self.org_id = None
+                            self.live_usage = None
+                        elif live:
                             self.live_usage = live
 
                 self.last_refresh = datetime.now()

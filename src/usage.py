@@ -28,9 +28,13 @@ def fetch_claude_ai_usage(session_key, org_id):
             f"{CLAUDE_AI_API}/organizations/{org_id}/usage",
             headers=headers,
             timeout=15,
+            verify=True,
         )
         if resp.status_code == 200:
             return _parse_usage_response(resp.json())
+        if resp.status_code in (401, 403):
+            # Session expired or revoked
+            return {"expired": True}
     except requests.RequestException:
         pass
     return None
