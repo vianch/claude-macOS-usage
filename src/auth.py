@@ -147,10 +147,22 @@ def extract_chrome_session_key():
             return plain_value
 
         # Try to decrypt using Chrome's Keychain key
-        return _decrypt_chrome_cookie(encrypted_value)
+        decrypted = _decrypt_chrome_cookie(encrypted_value)
+        if decrypted and _is_valid_session_key(decrypted):
+            return decrypted
+        return None
 
     except (sqlite3.Error, OSError):
         return None
+
+
+def _is_valid_session_key(value):
+    """Check that a session key contains only ASCII-printable characters."""
+    try:
+        value.encode("latin-1")
+        return len(value) > 10 and value.isprintable()
+    except (UnicodeEncodeError, AttributeError):
+        return False
 
 
 def _decrypt_chrome_cookie(encrypted_value):
