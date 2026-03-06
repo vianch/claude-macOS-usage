@@ -6,6 +6,9 @@ A macOS menu bar app that tracks your Claude AI usage limits in real time. See s
 
 <!-- ![Screenshot](docs/screenshot.png) -->
 
+<img width="403" height="688" alt="Screenshot 2026-03-06 at 18 01 56" src="https://github.com/user-attachments/assets/ff6e654c-9424-4877-8040-a30cdafbbae3" />
+
+
 ---
 
 ## Features
