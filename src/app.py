@@ -380,5 +380,18 @@ class ClaudeUsageApp(rumps.App):
         rumps.quit_application()
 
 
+def _set_process_name():
+    """Set the macOS process name so notifications show 'Claude Usage Monitor' instead of 'Python'."""
+    try:
+        from Foundation import NSBundle
+        bundle = NSBundle.mainBundle()
+        info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+        if info:
+            info["CFBundleName"] = APP_NAME
+    except ImportError:
+        pass
+
+
 def main():
+    _set_process_name()
     ClaudeUsageApp().run()
