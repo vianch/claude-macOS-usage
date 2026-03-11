@@ -36,6 +36,17 @@ from .usage import (
 )
 
 
+def _run_on_main_thread(func):
+    """Schedule a no-arg function to run on the main thread.
+
+    Uses PyObjC's performSelectorOnMainThread to safely dispatch UI work
+    back to the main run loop, avoiding AppKit threading violations that
+    cause hangs and 'Not Responding' states.
+    """
+    from PyObjCTools import AppHelper
+    AppHelper.callAfter(func)
+
+
 def _noop(_):
     """No-op callback to keep menu items enabled (readable text)."""
     pass
@@ -52,6 +63,7 @@ class ClaudeUsageApp(rumps.App):
         self.last_refresh = None
         self.is_refreshing = False
         self.has_session = False
+        self.has_cli_creds = False  # Cached to avoid subprocess in menu builds
 
         self._detect_on_launch()
         self._build_menu()
@@ -62,40 +74,53 @@ class ClaudeUsageApp(rumps.App):
     # --- Startup ---
 
     def _detect_on_launch(self):
-        """Detect CLI credentials and existing session on launch."""
-        # Detect tier from CLI
-        tier = detect_tier_from_cli()
-        if tier:
-            self.tier = tier
+        """Detect CLI credentials and existing session on launch (off main thread)."""
+        def _detect():
+            tier = detect_tier_from_cli()
+            username = get_cli_username()
+            cli_stats = get_cli_stats()
+            cli_creds = has_cli_credentials()
 
-        self.username = get_cli_username()
+            org_id = None
+            has_session = False
 
-        # Check for existing session key
-        session_key = get_session_key()
-        if session_key:
-            result = validate_session(session_key)
-            if result:
-                self.org_id = result["org_id"]
-                self.has_session = True
-
-        # Try auto-extracting from Chrome if no session
-        if not self.has_session:
-            chrome_key = extract_chrome_session_key()
-            if chrome_key:
-                result = validate_session(chrome_key)
+            # Check for existing session key
+            session_key = get_session_key()
+            if session_key:
+                result = validate_session(session_key)
                 if result:
-                    save_session_key(chrome_key)
-                    self.org_id = result["org_id"]
-                    self.has_session = True
+                    org_id = result["org_id"]
+                    has_session = True
 
-        # Load CLI stats (always available if CLI installed)
-        self.cli_stats = get_cli_stats()
+            # Try auto-extracting from Chrome if no session
+            if not has_session:
+                chrome_key = extract_chrome_session_key()
+                if chrome_key:
+                    result = validate_session(chrome_key)
+                    if result:
+                        save_session_key(chrome_key)
+                        org_id = result["org_id"]
+                        has_session = True
 
-        # Kick off live data fetch
-        if self.has_session:
-            self._refresh_data()
-        elif self.cli_stats:
-            self._update_title_icon()
+            # Apply results on main thread
+            def _apply():
+                if tier:
+                    self.tier = tier
+                self.username = username
+                self.cli_stats = cli_stats
+                self.has_cli_creds = cli_creds
+                self.org_id = org_id
+                self.has_session = has_session
+                self._build_menu()
+
+                if self.has_session:
+                    self._refresh_data()
+                elif self.cli_stats:
+                    self._update_title_icon()
+
+            _run_on_main_thread(_apply)
+
+        threading.Thread(target=_detect, daemon=True).start()
 
     # --- Menu ---
 
@@ -110,7 +135,7 @@ class ClaudeUsageApp(rumps.App):
             header = f"{self.username} - {tier_info['name']} ({tier_info['price']})"
         else:
             header = f"{tier_info['name']} ({tier_info['price']})"
-        if has_cli_credentials():
+        if self.has_cli_creds:
             header += "  \u2713"  # checkmark
 
         self.menu.add(rumps.MenuItem(header, callback=_noop))
@@ -259,27 +284,40 @@ class ClaudeUsageApp(rumps.App):
         def _fetch():
             try:
                 # Refresh CLI stats
-                self.cli_stats = get_cli_stats()
+                cli_stats = get_cli_stats()
 
                 # Fetch live usage if we have a session
+                live = None
+                expired = False
                 if self.has_session:
                     session_key = get_session_key()
                     if session_key and self.org_id:
                         live = fetch_claude_ai_usage(session_key, self.org_id)
                         if live and live.get("expired"):
-                            # Session expired — disconnect automatically
-                            delete_session_key()
-                            self.has_session = False
-                            self.org_id = None
-                            self.live_usage = None
-                        elif live:
-                            self.live_usage = live
+                            expired = True
+                            live = None
 
-                self.last_refresh = datetime.now()
-                self._update_title_icon()
-            finally:
-                self.is_refreshing = False
-                self._build_menu()
+                # Dispatch all state + UI updates back to the main thread
+                def _apply():
+                    self.cli_stats = cli_stats
+                    if expired:
+                        delete_session_key()
+                        self.has_session = False
+                        self.org_id = None
+                        self.live_usage = None
+                    elif live:
+                        self.live_usage = live
+                    self.last_refresh = datetime.now()
+                    self.is_refreshing = False
+                    self._update_title_icon()
+                    self._build_menu()
+
+                _run_on_main_thread(_apply)
+            except Exception:
+                def _reset():
+                    self.is_refreshing = False
+                    self._build_menu()
+                _run_on_main_thread(_reset)
 
         threading.Thread(target=_fetch, daemon=True).start()
 
@@ -321,24 +359,31 @@ class ClaudeUsageApp(rumps.App):
         open_claude_settings()
 
     def _on_connect_session(self, _):
-        # First try auto-extract from Chrome
-        chrome_key = extract_chrome_session_key()
-        if chrome_key:
-            result = validate_session(chrome_key)
-            if result:
-                save_session_key(chrome_key)
-                self.org_id = result["org_id"]
-                self.has_session = True
-                rumps.notification(
-                    APP_NAME,
-                    "Connected automatically!",
-                    "Session extracted from Chrome cookies.",
-                )
-                self._build_menu()
-                self._refresh_data()
-                return
+        def _try_auto_connect():
+            chrome_key = extract_chrome_session_key()
+            if chrome_key:
+                result = validate_session(chrome_key)
+                if result:
+                    def _apply():
+                        save_session_key(chrome_key)
+                        self.org_id = result["org_id"]
+                        self.has_session = True
+                        rumps.notification(
+                            APP_NAME,
+                            "Connected automatically!",
+                            "Session extracted from Chrome cookies.",
+                        )
+                        self._build_menu()
+                        self._refresh_data()
+                    _run_on_main_thread(_apply)
+                    return
 
-        # Manual flow
+            # Auto-extract failed — show manual dialog on main thread
+            _run_on_main_thread(self._show_manual_connect_dialog)
+
+        threading.Thread(target=_try_auto_connect, daemon=True).start()
+
+    def _show_manual_connect_dialog(self):
         instructions = get_session_cookie_instructions()
         window = rumps.Window(
             message=instructions,
@@ -353,20 +398,27 @@ class ClaudeUsageApp(rumps.App):
             return
 
         session_key = response.text.strip().strip("'\"")
-        result = validate_session(session_key)
-        if result:
-            save_session_key(session_key)
-            self.org_id = result["org_id"]
-            self.has_session = True
-            rumps.notification(APP_NAME, "Connected!", f"Org: {result.get('name', result['org_id'][:12])}")
-            self._build_menu()
-            self._refresh_data()
-        else:
-            rumps.notification(
-                APP_NAME,
-                "Connection failed",
-                "Invalid or expired session cookie. Try again.",
-            )
+
+        def _validate():
+            result = validate_session(session_key)
+
+            def _apply():
+                if result:
+                    save_session_key(session_key)
+                    self.org_id = result["org_id"]
+                    self.has_session = True
+                    rumps.notification(APP_NAME, "Connected!", f"Org: {result.get('name', result['org_id'][:12])}")
+                    self._build_menu()
+                    self._refresh_data()
+                else:
+                    rumps.notification(
+                        APP_NAME,
+                        "Connection failed",
+                        "Invalid or expired session cookie. Try again.",
+                    )
+            _run_on_main_thread(_apply)
+
+        threading.Thread(target=_validate, daemon=True).start()
 
     def _on_disconnect(self, _):
         delete_session_key()
