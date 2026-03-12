@@ -143,9 +143,6 @@ class ClaudeUsageApp(rumps.App):
 
         # ---- Live usage (from claude.ai session) ----
         if self.live_usage:
-            self.menu.add(rumps.MenuItem("  Your usage limits", callback=_noop))
-            self.menu.add(rumps.separator)
-
             for key in ("session", "weekly_all", "weekly_sonnet"):
                 bucket = self.live_usage[key]
                 pct = bucket["percent"]
@@ -159,16 +156,6 @@ class ClaudeUsageApp(rumps.App):
                 ))
                 if reset:
                     self.menu.add(rumps.MenuItem(f"    Resets {reset}", callback=_noop))
-                self.menu.add(rumps.separator)
-
-            # Extra usage info
-            eu = self.live_usage.get("extra_usage")
-            if eu and eu.get("enabled"):
-                limit_str = f"${eu['monthly_limit']}" if eu["monthly_limit"] else "unlimited"
-                self.menu.add(rumps.MenuItem(
-                    f"  Extra usage: ${eu['used_credits']:.2f} / {limit_str}",
-                    callback=_noop,
-                ))
                 self.menu.add(rumps.separator)
 
         elif self.has_session:
@@ -185,21 +172,9 @@ class ClaudeUsageApp(rumps.App):
 
         # ---- CLI Stats (always available if CLI installed) ----
         if self.cli_stats:
-            self.menu.add(rumps.MenuItem("  Claude Code activity", callback=_noop))
-            self.menu.add(rumps.separator)
+
 
             stats = self.cli_stats
-            self.menu.add(rumps.MenuItem(
-                f"    Today:  {stats['today_messages']} msgs, "
-                f"{stats['today_sessions']} sessions, "
-                f"{stats['today_tools']} tools",
-                callback=_noop,
-            ))
-            self.menu.add(rumps.MenuItem(
-                f"    Week:   {stats['week_messages']} msgs, "
-                f"{stats['week_sessions']} sessions",
-                callback=_noop,
-            ))
 
             # Token usage by model (today)
             if stats["today_tokens_by_model"]:
@@ -229,12 +204,6 @@ class ClaudeUsageApp(rumps.App):
                         callback=_noop,
                     ))
 
-            self.menu.add(rumps.separator)
-            self.menu.add(rumps.MenuItem(
-                f"    All time: {stats['total_messages']} msgs, "
-                f"{stats['total_sessions']} sessions",
-                callback=_noop,
-            ))
 
         self.menu.add(rumps.separator)
 
@@ -248,18 +217,6 @@ class ClaudeUsageApp(rumps.App):
         refresh_label = "Refreshing..." if self.is_refreshing else "Refresh Now"
         self.menu.add(rumps.MenuItem(refresh_label, callback=self._on_refresh))
         self.menu.add(rumps.MenuItem("Open claude.ai/settings/usage", callback=self._on_open_settings))
-
-        # Tier selector
-        tier_menu = rumps.MenuItem("Tier")
-        for key, info in TIERS.items():
-            check = "\u2713 " if key == self.tier else "   "
-            tier_menu.add(rumps.MenuItem(
-                f"{check}{info['name']} ({info['price']})",
-                callback=self._make_tier_callback(key),
-            ))
-        self.menu.add(tier_menu)
-
-        self.menu.add(rumps.separator)
 
         # Session management
         if self.has_session:
@@ -347,13 +304,6 @@ class ClaudeUsageApp(rumps.App):
 
     def _on_refresh(self, _):
         self._refresh_data()
-
-    def _make_tier_callback(self, tier_key):
-        def callback(_):
-            self.tier = tier_key
-            self._build_menu()
-            self._update_title_icon()
-        return callback
 
     def _on_open_settings(self, _):
         open_claude_settings()
